@@ -1,0 +1,25 @@
+embabel:
+  agent:
+    platform:
+      models:
+        # Google Gemini — set GOOGLE_API_KEY or replace the default value below
+        googlegenai:
+          api-key: ${GOOGLE_API_KEY:AIzaSyCHF4CZIcMUU7qdOjgTTJdosqNUegfk0-Q}
+
+        # OpenAI (ChatGPT) — set OPENAI_API_KEY env var or add your key as default
+        openai:
+          api-key: ${OPENAI_API_KEY:}
+          # LM Studio (OpenAI-compatible)
+          base-url: ${OPENAI_BASE_URL:http://127.0.0.1:1234}
+
+        # Anthropic (Claude) — set ANTHROPIC_API_KEY env var or add your key as default
+        anthropic:
+          api-key: ${ANTHROPIC_API_KEY:}
+
+  models:
+    # ── Switch provider by changing this one line ──────────────────────────
+    # Google Gemini:  gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
+    # OpenAI:         gpt-4o-mini      | gpt-4.1          | gpt-4.1-mini
+    # Anthropic:      claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
+    # LM Studio: set to your local model name (e.g., "qwen2.5-7b-instruct")
+    default-llm: ${LOCAL_LLM_MODEL:qwen/qwen3-coder-next}
