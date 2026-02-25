@@ -34,6 +34,7 @@ dependencies {
 
     // LLM providers — all three active; switch default-llm in application.yml to choose
     implementation("com.embabel.agent:embabel-agent-starter-google-genai:$embabelVersion")
+    implementation("com.embabel.agent:embabel-agent-starter-lmstudio:$embabelVersion")
     implementation("com.embabel.agent:embabel-agent-starter-openai:$embabelVersion")
     implementation("com.embabel.agent:embabel-agent-starter-anthropic:$embabelVersion")
 
