@@ -68,8 +68,8 @@ class CodeReviewAgent {
             root.walkTopDown()
                 .onEnter { dir -> dir.name !in IGNORED_DIRS }
                 .filter { it.isFile && it.extension in extensions }
-                .filter { it.length() < 100_000 }   // skip files larger than 100 KB
-                .take(15)                             // cap at 15 files to stay within token limits
+                .filter { it.length() < 30_000 }    // skip files larger than 30 KB
+                .take(5)                              // cap at 5 files to stay within local model context limits
                 .toList()
         }
 

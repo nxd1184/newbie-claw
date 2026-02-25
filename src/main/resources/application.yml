@@ -9,6 +9,8 @@ embabel:
         # LM Studio — dynamically discovers loaded models at startup
         lmstudio:
           base-url: ${LMSTUDIO_BASE_URL:http://192.168.1.147:1234}
+          max-attempts: 2        # reduce retries to avoid flooding LM Studio
+          backoff-millis: 2000   # wait 2s between retries
 
         # OpenAI (ChatGPT) — set OPENAI_API_KEY env var to enable
         openai:
@@ -17,6 +19,9 @@ embabel:
         # Anthropic (Claude) — set ANTHROPIC_API_KEY env var or add your key as default
         anthropic:
           api-key: ${ANTHROPIC_API_KEY:}
+
+  llm:
+    timeout: 300   # seconds — give local model up to 5 min per call
 
   models:
     # ── Switch provider by changing this one line (or set LOCAL_LLM_MODEL env var) ──
