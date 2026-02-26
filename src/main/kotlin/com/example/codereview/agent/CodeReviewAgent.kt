@@ -5,18 +5,20 @@ import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.domain.io.UserInput
-import com.example.codereview.domain.BugAnalysis
-import com.example.codereview.domain.CodeInput
-import com.example.codereview.domain.CodeReview
+import com.example.codereview.domain.ChunkFindings
+import com.example.codereview.domain.FileFindings
+import com.example.codereview.domain.ProjectFindings
 import com.example.codereview.domain.ProjectPath
-import com.example.codereview.domain.SecurityAnalysis
-import com.example.codereview.domain.StyleAnalysis
+import com.example.codereview.domain.CodeReview
+import com.example.codereview.domain.SourceFile
+import com.example.codereview.domain.SourceFiles
 import java.io.File
 
-// Directories to skip when walking a project tree
 private val IGNORED_DIRS = setOf(".git", "build", "target", "node_modules", ".gradle", ".idea", "out", "dist")
 
-// Map from language name to its file extensions
+// ~3000 chars fits comfortably inside a 4k-token context with prompt overhead
+private const val CHUNK_SIZE = 3000
+
 private fun extensionsFor(language: String): Set<String> = when (language.lowercase()) {
     "kotlin"     -> setOf("kt", "kts")
     "java"       -> setOf("java")
@@ -26,161 +28,191 @@ private fun extensionsFor(language: String): Set<String> = when (language.lowerc
     else         -> setOf(language.lowercase())
 }
 
+private fun printStep(label: String, detail: String = "") {
+    println("\n" + "=".repeat(80))
+    println(">>> $label")
+    if (detail.isNotEmpty()) println("    $detail")
+    println("=".repeat(80) + "\n")
+}
+
 @Agent(description = "Reviews code for bugs, style issues, and security vulnerabilities")
 class CodeReviewAgent {
 
-    /**
-     * Entry point: parses the user's natural language request into a ProjectPath.
-     * This lets the `x "..."` shell command kick off the full review pipeline.
-     */
     @Action(description = "Parse the user's request to extract the project path and language")
-    fun parseUserRequest(userInput: UserInput, context: OperationContext): ProjectPath =
-        context.ai()
-            .withDefaultLlm()
-            .createObject(
-                """
-                Extract the file system path and programming language from this request:
-                "${userInput.content}"
+    fun parseUserRequest(userInput: UserInput, context: OperationContext): ProjectPath {
+        val prompt = """
+            Extract the file system path and programming language from this request:
+            "${userInput.content}"
 
-                Rules:
-                - path: the absolute file system path mentioned by the user (keep it exactly as written)
-                - language: one of: kotlin, java, python, javascript, typescript
-                  (infer from the request or the path if not stated explicitly)
-                """.trimIndent(),
-                ProjectPath::class.java,
-            )
+            Rules:
+            - path: the absolute file system path mentioned by the user (keep it exactly as written)
+            - language: one of: kotlin, java, python, javascript, typescript
+              (infer from the request or the path if not stated explicitly)
+        """.trimIndent()
+        printStep("STEP 1/3  parseUserRequest")
+        return context.ai().withDefaultLlm().createObject(prompt, ProjectPath::class.java)
+    }
 
-    /**
-     * Reads source files from a local path and produces a CodeInput.
-     * Accepts either a single file or a directory.
-     * Embabel will call this automatically when the input is a ProjectPath.
-     */
-    @Action(description = "Read source code files from a local path and prepare them for review")
-    fun readSourceFiles(projectPath: ProjectPath): CodeInput {
+    @Action(description = "Read source files from disk, returning one SourceFile per file")
+    fun readSourceFiles(projectPath: ProjectPath): SourceFiles {
         val root = File(projectPath.path)
         require(root.exists()) { "Path does not exist: ${projectPath.path}" }
 
         val extensions = extensionsFor(projectPath.language)
+        val files = if (root.isFile) listOf(root)
+        else root.walkTopDown()
+            .onEnter { dir -> dir.name !in IGNORED_DIRS }
+            .filter { it.isFile && it.extension in extensions }
+            .filter { it.length() < 50_000 }
+            .take(10)
+            .toList()
 
-        val files = if (root.isFile) {
-            listOf(root)
-        } else {
-            root.walkTopDown()
-                .onEnter { dir -> dir.name !in IGNORED_DIRS }
-                .filter { it.isFile && it.extension in extensions }
-                .filter { it.length() < 30_000 }    // skip files larger than 30 KB
-                .take(5)                              // cap at 5 files to stay within local model context limits
-                .toList()
+        require(files.isNotEmpty()) { "No ${projectPath.language} files found in: ${projectPath.path}" }
+
+        val sourceFiles = files.map { file ->
+            SourceFile(
+                path = file.relativeTo(root).path,
+                content = file.readText(),
+                language = projectPath.language,
+            )
         }
-
-        require(files.isNotEmpty()) {
-            "No ${projectPath.language} source files found in: ${projectPath.path}"
-        }
-
-        val combined = files.joinToString("\n\n") { file ->
-            "// ═══ File: ${file.relativeTo(root)} ═══\n${file.readText()}"
-        }
-
-        return CodeInput(code = combined, language = projectPath.language)
+        println("\n[readSourceFiles] Loaded ${sourceFiles.size} file(s): ${sourceFiles.map { it.path }}\n")
+        return SourceFiles(files = sourceFiles, language = projectPath.language)
     }
 
-    @Action(description = "Analyze the code for bugs and logic errors")
-    fun analyzeForBugs(input: CodeInput, context: OperationContext): BugAnalysis =
-        context.ai()
-            .withDefaultLlm()
-            .createObject(
-                """
-                You are an expert code reviewer specializing in bug detection.
-                Analyze the following ${input.language} code for bugs, logic errors,
-                null pointer issues, off-by-one errors, and incorrect assumptions.
+    /**
+     * Map/Reduce analysis:
+     *   MAP      — split each file into CHUNK_SIZE chunks, call LLM once per chunk
+     *   REDUCE 1 — LLM merges/dedupes chunk findings per file
+     *   REDUCE 2 — LLM merges/dedupes file findings across the whole repo
+     */
+    @Action(description = "Map: analyze each file in 4k-context chunks. Reduce: merge per file, then per repo")
+    fun mapReduceAnalysis(sourceFiles: SourceFiles, context: OperationContext): ProjectFindings {
+        val llm = context.ai().withDefaultLlm()
 
-                Code:
-                ```${input.language}
-                ${input.code}
-                ```
-
-                Return a structured list of bugs found. If no bugs are found, return an empty list.
-                """.trimIndent(),
-                BugAnalysis::class.java,
+        // ── MAP + REDUCE 1: per-file ──────────────────────────────────────────────
+        val fileFindings: List<FileFindings> = sourceFiles.files.mapIndexed { fileIdx, file ->
+            val chunks = file.content.chunked(CHUNK_SIZE)
+            printStep(
+                "MAP  file ${fileIdx + 1}/${sourceFiles.files.size}: ${file.path}",
+                "${chunks.size} chunk(s) of up to $CHUNK_SIZE chars",
             )
 
-    @Action(description = "Check the code for style and readability issues")
-    fun checkCodeStyle(input: CodeInput, context: OperationContext): StyleAnalysis =
-        context.ai()
-            .withDefaultLlm()
-            .createObject(
-                """
-                You are an expert code reviewer specializing in code style and best practices.
-                Analyze the following ${input.language} code for style issues such as:
-                - Poor naming conventions
-                - Functions that are too long or complex
-                - Missing or unclear comments
-                - Duplicated code
-                - Poor structure or readability
+            // MAP: analyze each chunk independently
+            val chunkResults: List<ChunkFindings> = chunks.mapIndexed { chunkIdx, chunk ->
+                val prompt = """
+                    You are a code reviewer. Analyze this ${file.language} code snippet.
+                    It is chunk ${chunkIdx + 1} of ${chunks.size} from file "${file.path}".
+                    Identify bugs, style issues, and security vulnerabilities visible in this snippet.
+                    Be concise — focus only on what is clearly wrong in these lines.
 
-                Code:
-                ```${input.language}
-                ${input.code}
-                ```
+                    ```${file.language}
+                    $chunk
+                    ```
+                """.trimIndent()
+                printStep("  MAP  chunk ${chunkIdx + 1}/${chunks.size} of ${file.path}")
+                llm.createObject(prompt, ChunkFindings::class.java)
+            }
 
-                Return a structured list of style issues. If the code is clean, return an empty list.
-                """.trimIndent(),
-                StyleAnalysis::class.java,
+            // REDUCE 1: merge all chunk findings for this file
+            if (chunkResults.size == 1) {
+                FileFindings(
+                    filePath = file.path,
+                    bugs = chunkResults[0].bugs,
+                    styleIssues = chunkResults[0].styleIssues,
+                    securityIssues = chunkResults[0].securityIssues,
+                )
+            } else {
+                val allBugs      = chunkResults.flatMap { it.bugs }
+                val allStyle     = chunkResults.flatMap { it.styleIssues }
+                val allSecurity  = chunkResults.flatMap { it.securityIssues }
+                val mergePrompt = """
+                    Merge and deduplicate these code review findings from ${chunkResults.size} chunks of "${file.path}".
+                    Remove exact duplicates and near-duplicates. When issues overlap, keep the most descriptive version.
+
+                    Bugs (${allBugs.size} total across chunks):
+                    ${allBugs.joinToString("\n") { "- $it" }}
+
+                    Style issues (${allStyle.size} total):
+                    ${allStyle.joinToString("\n") { "- $it" }}
+
+                    Security issues (${allSecurity.size} total):
+                    ${allSecurity.joinToString("\n") { "- $it" }}
+                """.trimIndent()
+                printStep("  REDUCE 1  merge ${chunkResults.size} chunks → ${file.path}")
+                val merged = llm.createObject(mergePrompt, ChunkFindings::class.java)
+                FileFindings(
+                    filePath = file.path,
+                    bugs = merged.bugs,
+                    styleIssues = merged.styleIssues,
+                    securityIssues = merged.securityIssues,
+                )
+            }
+        }
+
+        // ── REDUCE 2: merge findings across all files ─────────────────────────────
+        if (fileFindings.size == 1) {
+            return ProjectFindings(
+                language = sourceFiles.language,
+                fileFindings = fileFindings,
+                bugs = fileFindings[0].bugs,
+                styleIssues = fileFindings[0].styleIssues,
+                securityIssues = fileFindings[0].securityIssues,
             )
+        }
 
-    @Action(description = "Scan the code for security vulnerabilities")
-    fun scanForSecurity(input: CodeInput, context: OperationContext): SecurityAnalysis =
-        context.ai()
-            .withDefaultLlm()
-            .createObject(
-                """
-                You are a security expert specializing in code vulnerability analysis.
-                Scan the following ${input.language} code for security issues such as:
-                - SQL injection
-                - XSS vulnerabilities
-                - Insecure deserialization
-                - Hardcoded credentials or secrets
-                - Improper input validation
-                - Sensitive data exposure
+        val allBugs     = fileFindings.flatMap { it.bugs }
+        val allStyle    = fileFindings.flatMap { it.styleIssues }
+        val allSecurity = fileFindings.flatMap { it.securityIssues }
+        val repoPrompt = """
+            Merge and deduplicate code review findings from ${fileFindings.size} ${sourceFiles.language} files.
+            Cross-file patterns (same issue in multiple files) should become a single finding noting it is widespread.
+            File-specific issues should be kept as-is.
 
-                Code:
-                ```${input.language}
-                ${input.code}
-                ```
+            Bugs (${allBugs.size} across all files):
+            ${allBugs.joinToString("\n") { "- $it" }}
 
-                Return a structured list of vulnerabilities found. If no issues are found, return an empty list.
-                """.trimIndent(),
-                SecurityAnalysis::class.java,
-            )
+            Style issues (${allStyle.size} across all files):
+            ${allStyle.joinToString("\n") { "- $it" }}
+
+            Security issues (${allSecurity.size} across all files):
+            ${allSecurity.joinToString("\n") { "- $it" }}
+        """.trimIndent()
+        printStep("REDUCE 2  merge ${fileFindings.size} files → project-level findings")
+        val projectLevel = llm.createObject(repoPrompt, ChunkFindings::class.java)
+
+        return ProjectFindings(
+            language = sourceFiles.language,
+            fileFindings = fileFindings,
+            bugs = projectLevel.bugs,
+            styleIssues = projectLevel.styleIssues,
+            securityIssues = projectLevel.securityIssues,
+        )
+    }
 
     @AchievesGoal(description = "Produce a complete, structured code review report")
-    @Action(description = "Combine all analyses into a final code review")
-    fun generateReview(
-        input: CodeInput,
-        bugs: BugAnalysis,
-        style: StyleAnalysis,
-        security: SecurityAnalysis,
-        context: OperationContext,
-    ): CodeReview =
-        context.ai()
-            .withDefaultLlm()
-            .createObject(
-                """
-                You are a senior code reviewer. Combine the following analysis results into
-                a final, comprehensive code review report.
+    @Action(description = "Generate the final code review report from merged project findings")
+    fun generateReview(findings: ProjectFindings, context: OperationContext): CodeReview {
+        val prompt = """
+            You are a senior code reviewer. Produce a final code review report for this ${findings.language} project.
+            ${findings.fileFindings.size} file(s) were analysed using map/reduce analysis.
 
-                Language: ${input.language}
+            Bugs found (${findings.bugs.size}):
+            ${findings.bugs.joinToString("\n") { "- $it" }}
 
-                Bug analysis found ${bugs.issues.size} issue(s): ${bugs.issues}
-                Style analysis found ${style.issues.size} issue(s): ${style.issues}
-                Security analysis found ${security.vulnerabilities.size} issue(s): ${security.vulnerabilities}
+            Style issues found (${findings.styleIssues.size}):
+            ${findings.styleIssues.joinToString("\n") { "- $it" }}
 
-                Produce a final CodeReview with:
-                - A concise summary paragraph
-                - The bugs, styleIssues, and securityIssues lists (copy them from the analysis above)
-                - An overallScore from 0 to 10 (10 = perfect, no issues)
-                - A recommendations list with the top 3–5 actionable improvements
-                """.trimIndent(),
-                CodeReview::class.java,
-            )
+            Security issues found (${findings.securityIssues.size}):
+            ${findings.securityIssues.joinToString("\n") { "- $it" }}
+
+            Produce a CodeReview with:
+            - summary: a concise paragraph describing the overall quality
+            - bugs, styleIssues, securityIssues: copy from above
+            - overallScore: 0–10 (10 = perfect, no issues)
+            - recommendations: top 3–5 actionable improvements
+        """.trimIndent()
+        printStep("STEP 3/3  generateReview")
+        return context.ai().withDefaultLlm().createObject(prompt, CodeReview::class.java)
+    }
 }

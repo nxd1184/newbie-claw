@@ -1,6 +1,6 @@
 package com.example.codereview.domain
 
-data class CodeInput(
-    val code: String,
+data class SourceFiles(
+    val files: List<SourceFile>,
     val language: String,
 )

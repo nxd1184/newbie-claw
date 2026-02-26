@@ -1,10 +1,15 @@
+spring:
+  shell:
+    noninteractive:
+      exit-on-error: true   # exit the process when a command fails (e.g. LLM timeout)
+
 embabel:
   agent:
     platform:
       models:
         # Google Gemini — set GOOGLE_API_KEY or replace the default value below
         googlegenai:
-          api-key: ${GOOGLE_API_KEY:AIzaSyCHF4CZIcMUU7qdOjgTTJdosqNUegfk0-Q}
+          api-key: ${GOOGLE_API_KEY:AIzaSyCfOJi6VobxJxQPJ310xs08gt4FtMdX8lM}
 
         # LM Studio — dynamically discovers loaded models at startup
         lmstudio:
@@ -21,12 +26,12 @@ embabel:
           api-key: ${ANTHROPIC_API_KEY:}
 
   llm:
-    timeout: 300   # seconds — give local model up to 5 min per call
+    timeout: 5m
 
   models:
     # ── Switch provider by changing this one line (or set LOCAL_LLM_MODEL env var) ──
-    # LM Studio:  qwen/qwen3-coder-next  (auto-discovered from local server)
+    # LM Studio:  qwen/qwen3-coder-next | openai/gpt-oss-120b  (auto-discovered from local server)
     # OpenAI:     gpt-4o-mini | gpt-4.1 | gpt-4.1-mini
     # Google:     gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
     # Anthropic:  claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
-    default-llm: ${LOCAL_LLM_MODEL:qwen/qwen3-coder-next}
+    default-llm: ${LOCAL_LLM_MODEL:qwen/qwen2.5-coder-14b}
