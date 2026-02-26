@@ -6,6 +6,13 @@ spring:
 embabel:
   agent:
     platform:
+      llm-operations:
+        prompts:
+          default-timeout: 300s    # wait up to 5 minutes for slow local LLMs (was silently ignored before)
+        data-binding:
+          max-attempts: 2          # reduce retries to avoid flooding LM Studio
+          fixed-backoff-millis: 2000
+
       models:
         # Google Gemini — set GOOGLE_API_KEY or replace the default value below
         googlegenai:
@@ -14,8 +21,6 @@ embabel:
         # LM Studio — dynamically discovers loaded models at startup
         lmstudio:
           base-url: ${LMSTUDIO_BASE_URL:http://192.168.1.147:1234}
-          max-attempts: 2        # reduce retries to avoid flooding LM Studio
-          backoff-millis: 2000   # wait 2s between retries
 
         # OpenAI (ChatGPT) — set OPENAI_API_KEY env var to enable
         openai:
@@ -25,12 +30,9 @@ embabel:
         anthropic:
           api-key: ${ANTHROPIC_API_KEY:}
 
-  llm:
-    timeout: 5m
-
   models:
     # ── Switch provider by changing this one line (or set LOCAL_LLM_MODEL env var) ──
-    # LM Studio:  qwen/qwen3-coder-next | openai/gpt-oss-120b  (auto-discovered from local server)
+    # LM Studio:  qwen/qwen3-coder-next | qwen/qwen2.5-coder-14b | openai/gpt-oss-120b  (auto-discovered from local server)
     # OpenAI:     gpt-4o-mini | gpt-4.1 | gpt-4.1-mini
     # Google:     gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
     # Anthropic:  claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
