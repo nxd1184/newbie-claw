@@ -37,3 +37,8 @@ embabel:
     # Google:     gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
     # Anthropic:  claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
     default-llm: ${LOCAL_LLM_MODEL:qwen/qwen2.5-coder-14b}
+
+code-review:
+  chunk-size: 10000           # chars per MAP chunk — tune to your LLM context window (16k tokens ≈ 64k chars max)
+  max-files: 10               # max source files to ingest per run
+  max-file-size-bytes: 50000  # skip files larger than this

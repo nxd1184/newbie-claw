@@ -13,11 +13,10 @@ import com.example.codereview.domain.CodeReview
 import com.example.codereview.domain.SourceFile
 import com.example.codereview.domain.SourceFiles
 import java.io.File
+import kotlin.time.measureTimedValue
+import kotlin.time.Duration
 
 private val IGNORED_DIRS = setOf(".git", "build", "target", "node_modules", ".gradle", ".idea", "out", "dist")
-
-// ~3000 chars fits comfortably inside a 4k-token context with prompt overhead
-private const val CHUNK_SIZE = 3000
 
 private fun extensionsFor(language: String): Set<String> = when (language.lowercase()) {
     "kotlin"     -> setOf("kt", "kts")
@@ -35,8 +34,22 @@ private fun printStep(label: String, detail: String = "") {
     println("=".repeat(80) + "\n")
 }
 
+private fun Duration.fmt(): String {
+    val totalSecs = inWholeSeconds
+    return if (totalSecs >= 60) "${totalSecs / 60}m ${totalSecs % 60}s" else "${totalSecs}s"
+}
+
+private fun <T> timed(label: String, block: () -> T): T {
+    val (value, duration) = measureTimedValue(block)
+    println("    ⏱  $label took ${duration.fmt()}")
+    return value
+}
+
 @Agent(description = "Reviews code for bugs, style issues, and security vulnerabilities")
-class CodeReviewAgent {
+class CodeReviewAgent(private val props: CodeReviewProperties) {
+
+    @Volatile
+    private var reviewStartMs: Long = 0
 
     @Action(description = "Parse the user's request to extract the project path and language")
     fun parseUserRequest(userInput: UserInput, context: OperationContext): ProjectPath {
@@ -49,8 +62,11 @@ class CodeReviewAgent {
             - language: one of: kotlin, java, python, javascript, typescript
               (infer from the request or the path if not stated explicitly)
         """.trimIndent()
+        reviewStartMs = System.currentTimeMillis()
         printStep("STEP 1/3  parseUserRequest")
-        return context.ai().withDefaultLlm().createObject(prompt, ProjectPath::class.java)
+        return timed("parseUserRequest") {
+            context.ai().withDefaultLlm().createObject(prompt, ProjectPath::class.java)
+        }
     }
 
     @Action(description = "Read source files from disk, returning one SourceFile per file")
@@ -63,8 +79,8 @@ class CodeReviewAgent {
         else root.walkTopDown()
             .onEnter { dir -> dir.name !in IGNORED_DIRS }
             .filter { it.isFile && it.extension in extensions }
-            .filter { it.length() < 50_000 }
-            .take(10)
+            .filter { it.length() < props.maxFileSizeBytes }
+            .take(props.maxFiles)
             .toList()
 
         require(files.isNotEmpty()) { "No ${projectPath.language} files found in: ${projectPath.path}" }
@@ -82,20 +98,21 @@ class CodeReviewAgent {
 
     /**
      * Map/Reduce analysis:
-     *   MAP      — split each file into CHUNK_SIZE chunks, call LLM once per chunk
+     *   MAP      — split each file into chunks (size from code-review.chunk-size), call LLM once per chunk
      *   REDUCE 1 — LLM merges/dedupes chunk findings per file
      *   REDUCE 2 — LLM merges/dedupes file findings across the whole repo
      */
     @Action(description = "Map: analyze each file in 4k-context chunks. Reduce: merge per file, then per repo")
     fun mapReduceAnalysis(sourceFiles: SourceFiles, context: OperationContext): ProjectFindings {
         val llm = context.ai().withDefaultLlm()
+        val analysisStart = System.currentTimeMillis()
 
         // ── MAP + REDUCE 1: per-file ──────────────────────────────────────────────
         val fileFindings: List<FileFindings> = sourceFiles.files.mapIndexed { fileIdx, file ->
-            val chunks = file.content.chunked(CHUNK_SIZE)
+            val chunks = file.content.chunked(props.chunkSize)
             printStep(
                 "MAP  file ${fileIdx + 1}/${sourceFiles.files.size}: ${file.path}",
-                "${chunks.size} chunk(s) of up to $CHUNK_SIZE chars",
+                "${chunks.size} chunk(s) of up to ${props.chunkSize} chars",
             )
 
             // MAP: analyze each chunk independently
@@ -111,7 +128,9 @@ class CodeReviewAgent {
                     ```
                 """.trimIndent()
                 printStep("  MAP  chunk ${chunkIdx + 1}/${chunks.size} of ${file.path}")
-                llm.createObject(prompt, ChunkFindings::class.java)
+                timed("LLM chunk ${chunkIdx + 1}/${chunks.size}") {
+                    llm.createObject(prompt, ChunkFindings::class.java)
+                }
             }
 
             // REDUCE 1: merge all chunk findings for this file
@@ -140,7 +159,9 @@ class CodeReviewAgent {
                     ${allSecurity.joinToString("\n") { "- $it" }}
                 """.trimIndent()
                 printStep("  REDUCE 1  merge ${chunkResults.size} chunks → ${file.path}")
-                val merged = llm.createObject(mergePrompt, ChunkFindings::class.java)
+                val merged = timed("LLM reduce-1 ${file.path}") {
+                    llm.createObject(mergePrompt, ChunkFindings::class.java)
+                }
                 FileFindings(
                     filePath = file.path,
                     bugs = merged.bugs,
@@ -152,6 +173,8 @@ class CodeReviewAgent {
 
         // ── REDUCE 2: merge findings across all files ─────────────────────────────
         if (fileFindings.size == 1) {
+            val elapsed = (System.currentTimeMillis() - analysisStart) / 1000
+            println("\n>>> mapReduceAnalysis total: ${elapsed / 60}m ${elapsed % 60}s\n")
             return ProjectFindings(
                 language = sourceFiles.language,
                 fileFindings = fileFindings,
@@ -179,7 +202,11 @@ class CodeReviewAgent {
             ${allSecurity.joinToString("\n") { "- $it" }}
         """.trimIndent()
         printStep("REDUCE 2  merge ${fileFindings.size} files → project-level findings")
-        val projectLevel = llm.createObject(repoPrompt, ChunkFindings::class.java)
+        val projectLevel = timed("LLM reduce-2 (project-level)") {
+            llm.createObject(repoPrompt, ChunkFindings::class.java)
+        }
+        val elapsed = (System.currentTimeMillis() - analysisStart) / 1000
+        println("\n>>> mapReduceAnalysis total: ${elapsed / 60}m ${elapsed % 60}s\n")
 
         return ProjectFindings(
             language = sourceFiles.language,
@@ -213,6 +240,13 @@ class CodeReviewAgent {
             - recommendations: top 3–5 actionable improvements
         """.trimIndent()
         printStep("STEP 3/3  generateReview")
-        return context.ai().withDefaultLlm().createObject(prompt, CodeReview::class.java)
+        val result = timed("generateReview") {
+            context.ai().withDefaultLlm().createObject(prompt, CodeReview::class.java)
+        }
+        val totalSecs = (System.currentTimeMillis() - reviewStartMs) / 1000
+        println("\n" + "=".repeat(80))
+        println(">>> TOTAL code review time: ${totalSecs / 60}m ${totalSecs % 60}s")
+        println("=".repeat(80) + "\n")
+        return result
     }
 }
