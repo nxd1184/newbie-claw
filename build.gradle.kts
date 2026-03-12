@@ -47,7 +47,7 @@ dependencies {
 
 // Override Spring Boot BOM versions to fix security vulnerabilities
 ext["spring-framework.version"] = "6.2.11"
-ext["jackson-bom.version"] = "2.18.3"
+ext["jackson-bom.version"] = "2.18.6"
 ext["logback.version"] = "1.5.26"
 ext["commons-lang3.version"] = "3.18.0"
 
