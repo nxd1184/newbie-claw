@@ -1,14 +1,19 @@
-# AI Code Review Agent
+# NewbieClaw
 
-A Kotlin/Spring Boot application that performs automated code reviews using the [Embabel](https://embabel.com) agent framework. It uses a map-reduce strategy to analyze source files in parallel and produces a structured report covering bugs, style issues, and security vulnerabilities.
+A Kotlin/Spring Boot multi-agent application powered by the [Embabel](https://embabel.com) agent framework. NewbieClaw provides intelligent automation for code review and invoice data extraction, using LLM-powered agents to analyze code quality and extract structured information from PDF documents.
 
-## How It Works
+## Features
 
-The agent runs three steps:
+### Code Review Agent
+Performs automated code reviews using a map-reduce strategy:
+1. **Parse** — Extracts the project path and language from the user's shell input
+2. **Map** — Reads source files, batches small files together, chunks large files, and runs all work units in parallel
+3. **Reduce + Report** — Deduplicates cross-file findings and generates a final `CodeReview` with summary, scored issues, and recommendations
 
-1. **Parse** — Extracts the project path and language from the user's shell input (regex first, LLM fallback).
-2. **Map** — Reads source files, batches small files together, chunks large files, and runs all work units in parallel against the configured LLM.
-3. **Reduce + Report** — Deduplicates cross-file findings and generates a final `CodeReview` with a summary, scored issues, and recommendations.
+### Invoice Extraction Agents
+- **Full Extraction**: Extracts complete structured invoice data (vendor, customer, line items, amounts, shipping info)
+- **Query Mode**: Answers specific questions about invoices ("what is the invoice number?", "who is the vendor?", etc.)
+- **OCR Support**: Handles scanned/image-based PDFs using Tesseract OCR
 
 ## Requirements
 
@@ -78,15 +83,18 @@ embabel:
 ## Project Structure
 
 ```
-src/main/kotlin/dev/stevennguyen/agent/
-├── CodeReviewApplication.kt       # Spring Boot entry point
+src/main/kotlin/dev/stevennguyen/newbieclaw/
+├── NewbieClawApplication.kt           # Spring Boot entry point
 ├── agent/
-│   ├── CodeReviewAgent.kt         # Agent actions (parse → map → reduce)
-│   └── CodeReviewProperties.kt    # @ConfigurationProperties for code-review.*
+│   ├── CodeReviewAgent.kt             # Code review agent (parse → map → reduce)
+│   ├── CodeReviewProperties.kt        # @ConfigurationProperties for code-review.*
+│   ├── InvoiceExtractionAgent.kt      # Full invoice extraction agent
+│   ├── InvoiceQueryAgent.kt           # Invoice question-answering agent
+│   └── InvoiceExtractionProperties.kt # @ConfigurationProperties for invoice-extraction.*
 └── domain/
     ├── BugIssue.kt
     ├── ChunkFindings.kt
-    ├── CodeReview.kt              # Final review output
+    ├── CodeReview.kt                  # Final review output
     ├── FileFindings.kt
     ├── ProjectFindings.kt
     ├── ProjectPath.kt
@@ -94,12 +102,25 @@ src/main/kotlin/dev/stevennguyen/agent/
     ├── Severity.kt
     ├── SourceFile.kt
     ├── SourceFiles.kt
-    └── StyleIssue.kt
+    ├── StyleIssue.kt
+    └── invoice/                       # Invoice domain models
+        ├── CustomerInfo.kt
+        ├── InvoiceAmounts.kt
+        ├── InvoiceAnswer.kt
+        ├── InvoiceData.kt
+        ├── InvoiceMetadata.kt
+        ├── InvoiceQuery.kt
+        ├── LineItem.kt
+        ├── PdfPath.kt
+        ├── ShippingInfo.kt
+        └── VendorInfo.kt
 ```
 
 ## Tech Stack
 
-- **Kotlin 2.1.0** + **Spring Boot 3.4.2**
+- **Kotlin 2.1.0** + **Spring Boot 3.4.5**
 - **Embabel 0.3.4** — agent framework (shell, LM Studio, OpenAI, Google GenAI, Anthropic starters)
-- **Kotlin Coroutines 1.9.0** — parallel MAP phase
+- **Kotlin Coroutines 1.9.0** — parallel MAP phase for code review
+- **Apache PDFBox 3.0.3** — PDF text extraction
+- **Tesseract OCR 5.13.0** — OCR for scanned PDFs
 - **Java 21** toolchain

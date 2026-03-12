@@ -1,17 +1,17 @@
-package dev.stevennguyen.agent.agent
+package dev.stevennguyen.newbieclaw.agent
 
 import com.embabel.agent.api.annotation.AchievesGoal
 import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.domain.io.UserInput
-import dev.stevennguyen.agent.domain.ChunkFindings
-import dev.stevennguyen.agent.domain.FileFindings
-import dev.stevennguyen.agent.domain.ProjectFindings
-import dev.stevennguyen.agent.domain.ProjectPath
-import dev.stevennguyen.agent.domain.CodeReview
-import dev.stevennguyen.agent.domain.SourceFile
-import dev.stevennguyen.agent.domain.SourceFiles
+import dev.stevennguyen.newbieclaw.domain.codeview.ChunkFindings
+import dev.stevennguyen.newbieclaw.domain.codeview.FileFindings
+import dev.stevennguyen.newbieclaw.domain.codeview.ProjectFindings
+import dev.stevennguyen.newbieclaw.domain.codeview.ProjectPath
+import dev.stevennguyen.newbieclaw.domain.codeview.CodeReview
+import dev.stevennguyen.newbieclaw.domain.codeview.SourceFile
+import dev.stevennguyen.newbieclaw.domain.codeview.SourceFiles
 import java.io.File
 import kotlin.time.measureTimedValue
 import kotlin.time.Duration

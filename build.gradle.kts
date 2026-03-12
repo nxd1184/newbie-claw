@@ -5,7 +5,7 @@ plugins {
     kotlin("plugin.spring") version "2.1.0"
 }
 
-group = "dev.stevennguyen"
+group = "dev.stevennguyen.newbieclaw"
 version = "0.0.1-SNAPSHOT"
 
 java {
@@ -43,6 +43,12 @@ dependencies {
 
     // Kotlin reflection — required by Spring
     implementation("org.jetbrains.kotlin:kotlin-reflect")
+
+    // PDF processing — extract text from PDF files
+    implementation("org.apache.pdfbox:pdfbox:3.0.3")
+    
+    // OCR for scanned PDFs — Tesseract integration
+    implementation("net.sourceforge.tess4j:tess4j:5.13.0")
 }
 
 // Override Spring Boot BOM versions to fix security vulnerabilities

@@ -44,3 +44,8 @@ code-review:
   max-file-size-bytes: 50000  # skip files larger than this
   concurrency: 4              # max parallel LLM requests for MAP phase
   batch-threshold: 20000      # files smaller than this (chars) get batched into a single LLM call
+
+invoice-extraction:
+  max-pdf-size-bytes: 10000000  # max PDF file size (10MB)
+  extraction-timeout: 300       # timeout for LLM extraction in seconds
+  enable-ocr: false             # OCR support for scanned PDFs (not yet implemented)

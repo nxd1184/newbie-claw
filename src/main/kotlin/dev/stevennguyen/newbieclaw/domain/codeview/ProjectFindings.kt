@@ -1,4 +1,4 @@
-package dev.stevennguyen.agent.domain
+package dev.stevennguyen.newbieclaw.domain.codeview
 
 /** Deduplicated findings across all files in the project (Reduce 2 output). */
 data class ProjectFindings(

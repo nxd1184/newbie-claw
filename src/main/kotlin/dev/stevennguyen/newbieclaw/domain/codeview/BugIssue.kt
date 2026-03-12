@@ -1,4 +1,4 @@
-package dev.stevennguyen.agent.domain
+package dev.stevennguyen.newbieclaw.domain.codeview
 
 data class BugIssue(
     val description: String,
