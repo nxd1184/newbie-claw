@@ -15,8 +15,19 @@ import com.example.codereview.domain.SourceFiles
 import java.io.File
 import kotlin.time.measureTimedValue
 import kotlin.time.Duration
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 private val IGNORED_DIRS = setOf(".git", "build", "target", "node_modules", ".gradle", ".idea", "out", "dist")
+
+private data class WorkUnit(
+    val label: String,
+    val filePaths: List<String>,
+    val promptBody: String,
+)
 
 private fun extensionsFor(language: String): Set<String> = when (language.lowercase()) {
     "kotlin"     -> setOf("kt", "kts")
@@ -53,19 +64,43 @@ class CodeReviewAgent(private val props: CodeReviewProperties) {
 
     @Action(description = "Parse the user's request to extract the project path and language")
     fun parseUserRequest(userInput: UserInput, context: OperationContext): ProjectPath {
+        reviewStartMs = System.currentTimeMillis()
+        printStep("STEP 1/3  parseUserRequest")
+
+        // Try fast regex extraction first — avoid an LLM round-trip
+        val text = userInput.content
+        val pathRegex = Regex("""([A-Z]:\\[^\s"]+|/[^\s"]+)""")
+        val pathMatch = pathRegex.find(text)?.groupValues?.get(1)
+
+        if (pathMatch != null) {
+            val language = inferLanguage(text, pathMatch)
+            println("    ⚡ Extracted path='$pathMatch', language='$language' (no LLM call)")
+            return ProjectPath(path = pathMatch, language = language)
+        }
+
+        // Fallback to LLM if regex can't find a path
         val prompt = """
             Extract the file system path and programming language from this request:
             "${userInput.content}"
-
             Rules:
             - path: the absolute file system path mentioned by the user (keep it exactly as written)
             - language: one of: kotlin, java, python, javascript, typescript
               (infer from the request or the path if not stated explicitly)
         """.trimIndent()
-        reviewStartMs = System.currentTimeMillis()
-        printStep("STEP 1/3  parseUserRequest")
-        return timed("parseUserRequest") {
+        return timed("parseUserRequest (LLM fallback)") {
             context.ai().withDefaultLlm().createObject(prompt, ProjectPath::class.java)
+        }
+    }
+
+    private fun inferLanguage(text: String, path: String): String {
+        val lower = (text + " " + path).lowercase()
+        return when {
+            "kotlin" in lower || ".kt" in lower -> "kotlin"
+            "java" in lower || ".java" in lower || "spring" in lower -> "java"
+            "python" in lower || ".py" in lower -> "python"
+            "typescript" in lower || ".ts" in lower || ".tsx" in lower -> "typescript"
+            "javascript" in lower || ".js" in lower -> "javascript"
+            else -> "java"
         }
     }
 
@@ -97,68 +132,119 @@ class CodeReviewAgent(private val props: CodeReviewProperties) {
     }
 
     /**
-     * Map/Reduce analysis:
-     *   MAP      — split each file into chunks (size from code-review.chunk-size), call LLM once per chunk
-     *   REDUCE 1 — LLM merges/dedupes chunk findings per file
-     *   REDUCE 2 — LLM merges/dedupes file findings across the whole repo
+     * Map/Reduce analysis (optimized for local LLMs):
+     *   - Small files (< batchThreshold) are batched into single LLM calls to reduce call count
+     *   - Large files are chunked and each chunk gets its own LLM call
+     *   - All work units run in parallel (concurrency controlled by code-review.concurrency)
+     *   - REDUCE 1 merges chunks only when a file exceeds chunk-size
+     *   - REDUCE 2 is deferred to generateReview to save one LLM call
      */
-    @Action(description = "Map: analyze each file in 4k-context chunks. Reduce: merge per file, then per repo")
+    @Action(description = "Parallel MAP with batching: group small files, analyze concurrently, merge chunks per file")
     fun mapReduceAnalysis(sourceFiles: SourceFiles, context: OperationContext): ProjectFindings {
         val llm = context.ai().withDefaultLlm()
         val analysisStart = System.currentTimeMillis()
+        val lang = sourceFiles.language
 
-        // ── MAP + REDUCE 1: per-file ──────────────────────────────────────────────
-        val fileFindings: List<FileFindings> = sourceFiles.files.mapIndexed { fileIdx, file ->
-            val chunks = file.content.chunked(props.chunkSize)
-            printStep(
-                "MAP  file ${fileIdx + 1}/${sourceFiles.files.size}: ${file.path}",
-                "${chunks.size} chunk(s) of up to ${props.chunkSize} chars",
-            )
+        // ── Partition into small (batchable) and large (chunked individually) ────
+        val smallFiles = sourceFiles.files.filter { it.content.length < props.batchThreshold }
+        val largeFiles = sourceFiles.files.filter { it.content.length >= props.batchThreshold }
 
-            // MAP: analyze each chunk independently
-            val chunkResults: List<ChunkFindings> = chunks.mapIndexed { chunkIdx, chunk ->
-                val prompt = """
-                    You are a code reviewer. Analyze this ${file.language} code snippet.
-                    It is chunk ${chunkIdx + 1} of ${chunks.size} from file "${file.path}".
-                    Identify bugs, style issues, and security vulnerabilities visible in this snippet.
-                    Be concise — focus only on what is clearly wrong in these lines.
+        // ── Build work units ─────────────────────────────────────────────────────
+        //   A "batch" work unit groups several small files into one LLM call.
+        //   A "chunk" work unit is a single chunk of a large file.
+        val workUnits = mutableListOf<WorkUnit>()
 
-                    ```${file.language}
-                    $chunk
-                    ```
-                """.trimIndent()
-                printStep("  MAP  chunk ${chunkIdx + 1}/${chunks.size} of ${file.path}")
-                timed("LLM chunk ${chunkIdx + 1}/${chunks.size}") {
-                    llm.createObject(prompt, ChunkFindings::class.java)
+        // Batch small files into groups that fit within chunkSize
+        if (smallFiles.isNotEmpty()) {
+            var batch = mutableListOf<SourceFile>()
+            var batchLen = 0
+            for (file in smallFiles) {
+                if (batchLen + file.content.length > props.chunkSize && batch.isNotEmpty()) {
+                    workUnits += buildBatchUnit(batch, lang)
+                    batch = mutableListOf()
+                    batchLen = 0
                 }
+                batch += file
+                batchLen += file.content.length
             }
+            if (batch.isNotEmpty()) {
+                workUnits += buildBatchUnit(batch, lang)
+            }
+        }
 
-            // REDUCE 1: merge all chunk findings for this file
-            if (chunkResults.size == 1) {
+        // Large files: one work unit per chunk
+        for (file in largeFiles) {
+            val chunks = file.content.chunked(props.chunkSize)
+            chunks.forEachIndexed { idx, chunk ->
+                val chunkLabel = if (chunks.size > 1) " (chunk ${idx + 1}/${chunks.size})" else ""
+                workUnits += WorkUnit(
+                    label = "${file.path}$chunkLabel",
+                    filePaths = listOf(file.path),
+                    promptBody = """
+                        Review this $lang code for bugs, style issues, and security vulnerabilities. Be concise.
+                        File: "${file.path}"$chunkLabel
+                        ```$lang
+                        $chunk
+                        ```
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        printStep(
+            "MAP phase",
+            "${sourceFiles.files.size} file(s) → ${workUnits.size} work unit(s) " +
+                "(${smallFiles.size} batched, ${largeFiles.size} large), concurrency=${props.concurrency}",
+        )
+
+        // ── Parallel MAP ─────────────────────────────────────────────────────────
+        val semaphore = Semaphore(props.concurrency)
+        val unitResults: List<Pair<List<String>, ChunkFindings>> = runBlocking {
+            workUnits.mapIndexed { idx, unit ->
+                async {
+                    semaphore.withPermit {
+                        printStep("  MAP  unit ${idx + 1}/${workUnits.size}: ${unit.label}")
+                        val findings = timed("LLM unit ${idx + 1}") {
+                            llm.createObject(unit.promptBody, ChunkFindings::class.java)
+                        }
+                        unit.filePaths to findings
+                    }
+                }
+            }.awaitAll()
+        }
+
+        // ── Group results by file path ───────────────────────────────────────────
+        val findingsByFile = mutableMapOf<String, MutableList<ChunkFindings>>()
+        for ((paths, findings) in unitResults) {
+            for (path in paths) {
+                findingsByFile.getOrPut(path) { mutableListOf() } += findings
+            }
+        }
+
+        // ── REDUCE 1: merge chunk findings per file (only when >1 chunk) ─────────
+        val fileFindings: List<FileFindings> = sourceFiles.files.map { file ->
+            val results = findingsByFile[file.path]
+                ?: return@map FileFindings(file.path, emptyList(), emptyList(), emptyList())
+
+            if (results.size == 1) {
                 FileFindings(
                     filePath = file.path,
-                    bugs = chunkResults[0].bugs,
-                    styleIssues = chunkResults[0].styleIssues,
-                    securityIssues = chunkResults[0].securityIssues,
+                    bugs = results[0].bugs,
+                    styleIssues = results[0].styleIssues,
+                    securityIssues = results[0].securityIssues,
                 )
             } else {
-                val allBugs      = chunkResults.flatMap { it.bugs }
-                val allStyle     = chunkResults.flatMap { it.styleIssues }
-                val allSecurity  = chunkResults.flatMap { it.securityIssues }
+                val allBugs     = results.flatMap { it.bugs }
+                val allStyle    = results.flatMap { it.styleIssues }
+                val allSecurity = results.flatMap { it.securityIssues }
                 val mergePrompt = """
-                    Merge and deduplicate these code review findings from ${chunkResults.size} chunks of "${file.path}".
-                    Remove exact duplicates and near-duplicates. When issues overlap, keep the most descriptive version.
-
-                    Bugs (${allBugs.size} total across chunks):
-                    ${allBugs.joinToString("\n") { "- $it" }}
-
-                    Style issues (${allStyle.size} total):
-                    ${allStyle.joinToString("\n") { "- $it" }}
-
-                    Security issues (${allSecurity.size} total):
-                    ${allSecurity.joinToString("\n") { "- $it" }}
+                    Merge and deduplicate findings from ${results.size} chunks of "${file.path}".
+                    Keep the most descriptive version when issues overlap.
+                    Bugs: ${allBugs.joinToString("\n") { "- $it" }}
+                    Style: ${allStyle.joinToString("\n") { "- $it" }}
+                    Security: ${allSecurity.joinToString("\n") { "- $it" }}
                 """.trimIndent()
-                printStep("  REDUCE 1  merge ${chunkResults.size} chunks → ${file.path}")
+                printStep("  REDUCE 1  merge ${results.size} chunks → ${file.path}")
                 val merged = timed("LLM reduce-1 ${file.path}") {
                     llm.createObject(mergePrompt, ChunkFindings::class.java)
                 }
@@ -171,75 +257,54 @@ class CodeReviewAgent(private val props: CodeReviewProperties) {
             }
         }
 
-        // ── REDUCE 2: merge findings across all files ─────────────────────────────
-        if (fileFindings.size == 1) {
-            val elapsed = (System.currentTimeMillis() - analysisStart) / 1000
-            println("\n>>> mapReduceAnalysis total: ${elapsed / 60}m ${elapsed % 60}s\n")
-            return ProjectFindings(
-                language = sourceFiles.language,
-                fileFindings = fileFindings,
-                bugs = fileFindings[0].bugs,
-                styleIssues = fileFindings[0].styleIssues,
-                securityIssues = fileFindings[0].securityIssues,
-            )
-        }
-
-        val allBugs     = fileFindings.flatMap { it.bugs }
-        val allStyle    = fileFindings.flatMap { it.styleIssues }
-        val allSecurity = fileFindings.flatMap { it.securityIssues }
-        val repoPrompt = """
-            Merge and deduplicate code review findings from ${fileFindings.size} ${sourceFiles.language} files.
-            Cross-file patterns (same issue in multiple files) should become a single finding noting it is widespread.
-            File-specific issues should be kept as-is.
-
-            Bugs (${allBugs.size} across all files):
-            ${allBugs.joinToString("\n") { "- $it" }}
-
-            Style issues (${allStyle.size} across all files):
-            ${allStyle.joinToString("\n") { "- $it" }}
-
-            Security issues (${allSecurity.size} across all files):
-            ${allSecurity.joinToString("\n") { "- $it" }}
-        """.trimIndent()
-        printStep("REDUCE 2  merge ${fileFindings.size} files → project-level findings")
-        val projectLevel = timed("LLM reduce-2 (project-level)") {
-            llm.createObject(repoPrompt, ChunkFindings::class.java)
-        }
         val elapsed = (System.currentTimeMillis() - analysisStart) / 1000
         println("\n>>> mapReduceAnalysis total: ${elapsed / 60}m ${elapsed % 60}s\n")
 
+        // Skip REDUCE-2 here — generateReview merges + produces the report in one LLM call
         return ProjectFindings(
             language = sourceFiles.language,
             fileFindings = fileFindings,
-            bugs = projectLevel.bugs,
-            styleIssues = projectLevel.styleIssues,
-            securityIssues = projectLevel.securityIssues,
+            bugs = fileFindings.flatMap { it.bugs },
+            styleIssues = fileFindings.flatMap { it.styleIssues },
+            securityIssues = fileFindings.flatMap { it.securityIssues },
+        )
+    }
+
+    /** Build a single work unit from a batch of small files. */
+    private fun buildBatchUnit(
+        batch: List<SourceFile>,
+        lang: String,
+    ): WorkUnit {
+        val filesBlock = batch.joinToString("\n\n") { f ->
+            "// FILE: ${f.path}\n```$lang\n${f.content}\n```"
+        }
+        return WorkUnit(
+            label = "batch[${batch.size} files: ${batch.joinToString(", ") { it.path.substringAfterLast('/').substringAfterLast('\\') }}]",
+            filePaths = batch.map { it.path },
+            promptBody = """
+                Review these $lang files for bugs, style issues, and security vulnerabilities. Be concise.
+                $filesBlock
+            """.trimIndent(),
         )
     }
 
     @AchievesGoal(description = "Produce a complete, structured code review report")
-    @Action(description = "Generate the final code review report from merged project findings")
+    @Action(description = "Deduplicate cross-file findings and generate the final code review report")
     fun generateReview(findings: ProjectFindings, context: OperationContext): CodeReview {
+        val perFileBlock = findings.fileFindings.joinToString("\n") { ff ->
+            "FILE ${ff.filePath}: bugs=${ff.bugs.size}, style=${ff.styleIssues.size}, security=${ff.securityIssues.size}" +
+                ff.bugs.joinToString("") { "\n  BUG [${it.severity}] ${it.lineReference}: ${it.description}" } +
+                ff.styleIssues.joinToString("") { "\n  STYLE: ${it.description} → ${it.suggestion}" } +
+                ff.securityIssues.joinToString("") { "\n  SEC [${it.severity}]: ${it.description} → ${it.recommendedFix}" }
+        }
         val prompt = """
-            You are a senior code reviewer. Produce a final code review report for this ${findings.language} project.
-            ${findings.fileFindings.size} file(s) were analysed using map/reduce analysis.
-
-            Bugs found (${findings.bugs.size}):
-            ${findings.bugs.joinToString("\n") { "- $it" }}
-
-            Style issues found (${findings.styleIssues.size}):
-            ${findings.styleIssues.joinToString("\n") { "- $it" }}
-
-            Security issues found (${findings.securityIssues.size}):
-            ${findings.securityIssues.joinToString("\n") { "- $it" }}
-
-            Produce a CodeReview with:
-            - summary: a concise paragraph describing the overall quality
-            - bugs, styleIssues, securityIssues: copy from above
-            - overallScore: 0–10 (10 = perfect, no issues)
-            - recommendations: top 3–5 actionable improvements
+            You are a senior code reviewer. Produce a final CodeReview for this ${findings.language} project (${findings.fileFindings.size} files).
+            Deduplicate cross-file issues (same issue in multiple files → single finding).
+            Per-file findings:
+            $perFileBlock
+            Produce: summary, bugs, styleIssues, securityIssues, overallScore (0–10), recommendations (top 3–5).
         """.trimIndent()
-        printStep("STEP 3/3  generateReview")
+        printStep("STEP 3/3  generateReview (merged with cross-file dedup)")
         val result = timed("generateReview") {
             context.ai().withDefaultLlm().createObject(prompt, CodeReview::class.java)
         }

@@ -38,6 +38,9 @@ dependencies {
     implementation("com.embabel.agent:embabel-agent-starter-openai:$embabelVersion")
     implementation("com.embabel.agent:embabel-agent-starter-anthropic:$embabelVersion")
 
+    // Kotlin coroutines — parallel MAP calls for faster local-LLM reviews
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+
     // Kotlin reflection — required by Spring
     implementation("org.jetbrains.kotlin:kotlin-reflect")
 }

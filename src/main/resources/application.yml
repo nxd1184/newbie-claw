@@ -36,9 +36,11 @@ embabel:
     # OpenAI:     gpt-4o-mini | gpt-4.1 | gpt-4.1-mini
     # Google:     gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
     # Anthropic:  claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
-    default-llm: ${LOCAL_LLM_MODEL:qwen/qwen2.5-coder-14b}
+    default-llm: ${LOCAL_LLM_MODEL:qwen/qwen3-coder-next}
 
 code-review:
-  chunk-size: 10000           # chars per MAP chunk — tune to your LLM context window (16k tokens ≈ 64k chars max)
-  max-files: 10               # max source files to ingest per run
+  chunk-size: 40000           # chars per MAP chunk — larger chunks = fewer LLM calls (qwen3-coder-next handles 32k+ tokens)
+  max-files: 50               # max source files to ingest per run
   max-file-size-bytes: 50000  # skip files larger than this
+  concurrency: 4              # max parallel LLM requests for MAP phase
+  batch-threshold: 20000      # files smaller than this (chars) get batched into a single LLM call
