@@ -3,8 +3,8 @@ package dev.stevennguyen.newbieclaw
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.runApplication
-import dev.stevennguyen.newbieclaw.agent.CodeReviewProperties
-import dev.stevennguyen.newbieclaw.agent.InvoiceExtractionProperties
+import dev.stevennguyen.newbieclaw.config.CodeReviewProperties
+import dev.stevennguyen.newbieclaw.config.InvoiceExtractionProperties
 
 @SpringBootApplication
 @EnableConfigurationProperties(CodeReviewProperties::class, InvoiceExtractionProperties::class)

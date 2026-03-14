@@ -5,6 +5,7 @@ import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.domain.io.UserInput
+import dev.stevennguyen.newbieclaw.config.CodeReviewProperties
 import dev.stevennguyen.newbieclaw.domain.codeview.ChunkFindings
 import dev.stevennguyen.newbieclaw.domain.codeview.FileFindings
 import dev.stevennguyen.newbieclaw.domain.codeview.ProjectFindings
@@ -33,6 +34,7 @@ private fun extensionsFor(language: String): Set<String> = when (language.lowerc
     "kotlin"     -> setOf("kt", "kts")
     "java"       -> setOf("java")
     "python"     -> setOf("py")
+    "golang"       -> setOf("go")
     "javascript" -> setOf("js", "mjs", "cjs")
     "typescript" -> setOf("ts", "tsx")
     else         -> setOf(language.lowercase())
@@ -84,7 +86,7 @@ class CodeReviewAgent(private val props: CodeReviewProperties) {
             "${userInput.content}"
             Rules:
             - path: the absolute file system path mentioned by the user (keep it exactly as written)
-            - language: one of: kotlin, java, python, javascript, typescript
+            - language: one of: kotlin, java, python, javascript, typescript, golang
               (infer from the request or the path if not stated explicitly)
         """.trimIndent()
         return timed("parseUserRequest (LLM fallback)") {
@@ -93,11 +95,12 @@ class CodeReviewAgent(private val props: CodeReviewProperties) {
     }
 
     private fun inferLanguage(text: String, path: String): String {
-        val lower = (text + " " + path).lowercase()
+        val lower = ("$text $path").lowercase()
         return when {
             "kotlin" in lower || ".kt" in lower -> "kotlin"
             "java" in lower || ".java" in lower || "spring" in lower -> "java"
             "python" in lower || ".py" in lower -> "python"
+            "golang" in lower || ".go" in lower -> "golang"
             "typescript" in lower || ".ts" in lower || ".tsx" in lower -> "typescript"
             "javascript" in lower || ".js" in lower -> "javascript"
             else -> "java"

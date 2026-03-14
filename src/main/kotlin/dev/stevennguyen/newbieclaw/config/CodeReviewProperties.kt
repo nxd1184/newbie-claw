@@ -1,4 +1,4 @@
-package dev.stevennguyen.newbieclaw.agent
+package dev.stevennguyen.newbieclaw.config
 
 import org.springframework.boot.context.properties.ConfigurationProperties
 

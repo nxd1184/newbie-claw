@@ -5,6 +5,7 @@ import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.domain.io.UserInput
+import dev.stevennguyen.newbieclaw.config.InvoiceExtractionProperties
 import dev.stevennguyen.newbieclaw.domain.invoice.PdfPath
 import dev.stevennguyen.newbieclaw.domain.invoice.InvoiceData
 import org.apache.pdfbox.Loader
