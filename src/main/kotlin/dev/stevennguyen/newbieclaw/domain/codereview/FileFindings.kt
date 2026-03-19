@@ -1,4 +1,4 @@
-package dev.stevennguyen.newbieclaw.domain.codeview
+package dev.stevennguyen.newbieclaw.domain.codereview
 
 /** Deduplicated findings for a single source file (Reduce 1 output). */
 data class FileFindings(

@@ -1,4 +1,4 @@
-package dev.stevennguyen.newbieclaw.domain.codeview
+package dev.stevennguyen.newbieclaw.domain.codereview
 
 /** Raw findings from analyzing one 3k-char chunk of a source file. */
 data class ChunkFindings(

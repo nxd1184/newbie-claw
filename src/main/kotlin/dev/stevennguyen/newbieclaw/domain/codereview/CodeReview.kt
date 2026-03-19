@@ -1,4 +1,4 @@
-package dev.stevennguyen.newbieclaw.domain.codeview
+package dev.stevennguyen.newbieclaw.domain.codereview
 
 data class CodeReview(
     val summary: String,

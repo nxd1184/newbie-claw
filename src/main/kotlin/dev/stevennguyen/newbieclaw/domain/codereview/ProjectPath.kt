@@ -1,4 +1,4 @@
-package dev.stevennguyen.newbieclaw.domain.codeview
+package dev.stevennguyen.newbieclaw.domain.codereview
 
 /**
  * Project path input — agent reads source files from disk.
