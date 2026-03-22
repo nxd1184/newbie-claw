@@ -16,11 +16,11 @@ embabel:
       models:
         # Google Gemini — set GOOGLE_API_KEY or replace the default value below
         googlegenai:
-          api-key: ${GOOGLE_API_KEY:AIzaSyCfOJi6VobxJxQPJ310xs08gt4FtMdX8lM}
+          api-key: ${GOOGLE_API_KEY:}
 
         # LM Studio — dynamically discovers loaded models at startup
         lmstudio:
-          base-url: ${LMSTUDIO_BASE_URL:http://192.168.1.147:1234}
+          base-url: ${LMSTUDIO_BASE_URL:}
 
         # OpenAI (ChatGPT) — set OPENAI_API_KEY env var to enable
         openai:
@@ -52,7 +52,7 @@ invoice-extraction:
 
 appsense:
   host: https://api.dev.appsensesolutions.com
-  token: ${APPSENSE_TOKEN:eyJhbGciOiJSUzI1NiIsImtpZCI6ImEyZGZiOGEzOGI1MmQ5ZjA5ZWRjYWE1MDcwYTBlOGYwYTllMDk4YmEiLCJ0eXAiOiJKV1QifQ.eyJuYW1lIjoiQXBwU2Vuc2UsIEFkbWluIiwicm9sZXMiOlsiUk9MRV9BZG1pbiIsIlJPTEVfQmlsbGVyIiwiUk9MRV9Qcm92aWRlciIsIlJPTEVfU2NoZWR1bGVyIl0sIlRlbmFudEluQ29udGV4dCI6IldvdW5kc0R5bmFtaWMtcm40YnQiLCJBdXRob3JpemVkVGVuYW50cyI6WyJXb3VuZHNEeW5hbWljLXJuNGJ0IiwiaGVoZS1xbDVtMSIsImhlaGV1LXQxeHd1IiwiQmxhZGUtc2ZxMGMiLCJ3MTI0MTI0LWVzY2Z5IiwicXdycXdycS02YjR1eCIsImhhaGFhaC1zbTNscSIsImRmMTIzMTItcHZpMjgiLCJDYW5oMTItdmc4emkiLCJkc2Zld3IxMi02a3NlNCIsIm5ld3RlbmF0aGVhLXVpdDYyIiwibmV3dGVuLTQ4bTAzIiwibmV3MzEtM3B3dWIiXSwiaXNzIjoiaHR0cHM6Ly9zZWN1cmV0b2tlbi5nb29nbGUuY29tL3JlYWR0b21lLTMxNTQxNSIsImF1ZCI6InJlYWR0b21lLTMxNTQxNSIsImF1dGhfdGltZSI6MTc3Mzc2NDIwNCwidXNlcl9pZCI6ImUwNzNhNTMzLTA4NmItNGU3NS05YjFlLTQyYWE5OWEyYjI5YiIsInN1YiI6ImUwNzNhNTMzLTA4NmItNGU3NS05YjFlLTQyYWE5OWEyYjI5YiIsImlhdCI6MTc3Mzc2NDIwNCwiZXhwIjoxNzczNzY3ODA0LCJlbWFpbCI6ImJlbnphY2guZmlyZUBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6ZmFsc2UsInBob25lX251bWJlciI6IisxNDA1MzcxMzg3MyIsImZpcmViYXNlIjp7ImlkZW50aXRpZXMiOnsiZW1haWwiOlsiYmVuemFjaC5maXJlQGdtYWlsLmNvbSJdLCJwaG9uZSI6WyIrMTQwNTM3MTM4NzMiXX0sInNpZ25faW5fcHJvdmlkZXIiOiJwYXNzd29yZCIsInRlbmFudCI6IldvdW5kc0R5bmFtaWMtcm40YnQifX0.Xjz-00YjHY3mHVxfQ59y-CnCn9BpusQ1z5AS4xBrelO1gVlDxBER5B3ah9FsnY8J4NeJ96XpYTXN-Ug3SgYNoRUrzQqNJHUG-BfJGo7gqPM028jHl_fLe0yIatbNeOBjdba5k5Rug1gzH4tQ2vN8_0QOICfqK4jI6L-m1p0zpTgwdrKjkZMJqfzAKAKWpfS77z8YwZEkzz-Tun3yC6hcfLH4hulXFkQ7j0nRYKLSuFOLaL62jP6rqQoN2ZgWbrZ3Tko8goRpo0hkNpiFn85mAUI9SEhcucxWLaCPTcXj33Das8SEZMFzLVqmJIIrpH8y3Ry1tw6ae9CppmSGmEAW7Q}     # set via environment variable
+  token: ${APPSENSE_TOKEN:}     # set via environment variable
   provider-id: PR000002
   clinician-id: 856d38a8-d240-4ffc-ba52-f0781aea1844
   facility-npi: "1114535333"
