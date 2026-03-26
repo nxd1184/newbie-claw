@@ -49,6 +49,10 @@ dependencies {
     
     // OCR for scanned PDFs — Tesseract integration
     implementation("net.sourceforge.tess4j:tess4j:5.13.0")
+    
+    // Test dependencies
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 }
 
 // Override Spring Boot BOM versions to fix security vulnerabilities

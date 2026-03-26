@@ -36,7 +36,7 @@ embabel:
     # OpenAI:     gpt-4o-mini | gpt-4.1 | gpt-4.1-mini
     # Google:     gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
     # Anthropic:  claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
-    default-llm: ${LOCAL_LLM_MODEL:mistralai/ministral-3-14b-reasoning}
+    default-llm: ${LOCAL_LLM_MODEL:google/gemma-3-27b}
 
 code-review:
   chunk-size: 40000           # chars per MAP chunk — larger chunks = fewer LLM calls (qwen3-coder-next handles 32k+ tokens)
@@ -49,6 +49,64 @@ invoice-extraction:
   max-pdf-size-bytes: 10000000  # max PDF file size (10MB)
   extraction-timeout: 300       # timeout for LLM extraction in seconds
   enable-ocr: false             # OCR support for scanned PDFs (not yet implemented)
+
+zone-extraction:
+  confidence-threshold: 0.4     # minimum confidence for zone extraction (lowered due to better OCR)
+  high-confidence-threshold: 0.75  # threshold for high confidence
+  ocr-dpi: 300.0                # DPI for OCR rendering
+  ocr-psm-mode: 11              # Tesseract PSM mode (11 = sparse text for word detection)
+  
+  # Image preprocessing to improve OCR quality
+  preprocessing-enabled: true
+  preprocessing-steps: [DENOISE, ENHANCE_CONTRAST]
+  denoise-strength: 2
+  contrast-factor: 2.0
+  
+  # Fuzzy matching for label detection with OCR errors
+  fuzzy-matching-enabled: true
+  similarity-threshold: 0.8
+  
+  # Multi-pass OCR strategy (disabled - causes text merging issues)
+  multi-pass-ocr-enabled: false
+  max-passes: 2
+  
+  patterns:
+    customer-number:
+      labels:
+        - "0101431"
+        - "91471431"
+        - "SHIP"
+        - "S H I P"
+        - "Ship"
+        - "SHIPTO"
+        - "SHIP TO"
+        - "H I P"
+        - "Customer Number"
+        - "Cust No"
+      strategy: BELOW
+      max-distance: 100
+    order-number:
+      labels:
+        - "INVOICE NO."
+        - "INVOICE NO"
+        - "Invoice No."
+        - "Invoice No"
+        - "Order No"
+        - "Doc No"
+      strategy: BELOW
+      max-distance: 80
+    line-number:
+      labels:
+        - "0001"
+        - "LINE"
+        - "Line"
+        - "L I N E"
+        - "LINE NO"
+        - "Line No"
+        - "ITEM"
+        - "Item No"
+      strategy: TABLE_COLUMN
+      max-distance: 100
 
 appsense:
   host: https://api.dev.appsensesolutions.com

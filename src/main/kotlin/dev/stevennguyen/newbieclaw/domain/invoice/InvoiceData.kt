@@ -9,3 +9,9 @@ data class InvoiceData(
     val shipping: ShippingInfo? = null,
     val notes: String? = null
 )
+
+data class InvoiceDataV1(
+    val customerNumber: String?,
+    val invoiceNumber: String?,
+    val firstLineNumber: String?,
+)
