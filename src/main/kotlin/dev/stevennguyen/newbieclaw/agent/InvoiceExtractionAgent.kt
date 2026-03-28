@@ -283,8 +283,26 @@ class InvoiceExtractionAgent(
             
             val zoneResult = zoneDetectionEngine.detectAndExtractZones(ocrWords, document)
             
+            // Check if all required fields were extracted AND are valid digit formats
+            val customerNumber = zoneResult.getZoneValue("customer-number")
+            val invoiceNumber = zoneResult.getZoneValue("order-number")
+            val firstLineNumber = zoneResult.getZoneValue("line-number")
+            
+            val isValidCustomerNumber = customerNumber?.matches(Regex("\\d{7}")) == true
+            val isValidInvoiceNumber = invoiceNumber?.matches(Regex("\\d{8}")) == true
+            val isValidLineNumber = firstLineNumber?.matches(Regex("\\d{4}")) == true
+            
+            val allFieldsExtracted = isValidCustomerNumber && isValidInvoiceNumber && isValidLineNumber
+            
             if (zoneResult.isHighConfidence()) {
                 println("\n    ✅ High confidence zone extraction (${zoneResult.overallConfidence})")
+                return buildInvoiceDataFromZones(zoneResult)
+            } else if (allFieldsExtracted) {
+                println("\n    ✅ All fields extracted via zone-based + regex fallback (confidence: ${zoneResult.overallConfidence})")
+                println("    📋 Trusting regex fallback results:")
+                println("      - Customer #: $customerNumber")
+                println("      - Invoice #: $invoiceNumber")
+                println("      - First Line #: $firstLineNumber")
                 return buildInvoiceDataFromZones(zoneResult)
             } else if (zoneResult.isMediumConfidence()) {
                 println("\n    ⚠️  Medium confidence zone extraction (${zoneResult.overallConfidence})")
