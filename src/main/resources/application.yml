@@ -1,4 +1,10 @@
 spring:
+  autoconfigure:
+    exclude:
+      # Google GenAI starter fails at startup when no API key is configured (unlike other
+      # providers which validate lazily). Exclude it here; to enable Google Gemini models,
+      # remove this exclusion and set GOOGLE_API_KEY env var (or configure in YAML).
+      - com.embabel.agent.autoconfigure.models.googlegenai.AgentGoogleGenAiAutoConfiguration
   shell:
     noninteractive:
       exit-on-error: true   # exit the process when a command fails (e.g. LLM timeout)
@@ -14,13 +20,12 @@ embabel:
           fixed-backoff-millis: 2000
 
       models:
-        # Google Gemini — set GOOGLE_API_KEY or replace the default value below
-        googlegenai:
-          api-key: ${GOOGLE_API_KEY:}
+        # Google Gemini — set GOOGLE_API_KEY env var to enable (no YAML entry needed;
+        # Embabel picks up GOOGLE_API_KEY automatically when the var is present)
 
         # LM Studio — dynamically discovers loaded models at startup
         lmstudio:
-          base-url: ${LMSTUDIO_BASE_URL:}
+          base-url: ${LMSTUDIO_BASE_URL:http://localhost:1234}
 
         # OpenAI (ChatGPT) — set OPENAI_API_KEY env var to enable
         openai:
@@ -36,7 +41,7 @@ embabel:
     # OpenAI:     gpt-4o-mini | gpt-4.1 | gpt-4.1-mini
     # Google:     gemini-2.0-flash | gemini-2.5-flash | gemini-2.5-pro
     # Anthropic:  claude-haiku-4-5 | claude-sonnet-4-5 | claude-opus-4-1
-    default-llm: ${LOCAL_LLM_MODEL:google/gemma-3-27b}
+    default-llm: ${LOCAL_LLM_MODEL:mistralai/ministral-3-14b-reasoning}
 
 code-review:
   chunk-size: 40000           # chars per MAP chunk — larger chunks = fewer LLM calls (qwen3-coder-next handles 32k+ tokens)
@@ -107,16 +112,3 @@ zone-extraction:
         - "Item No"
       strategy: TABLE_COLUMN
       max-distance: 100
-
-appsense:
-  host: https://api.dev.appsensesolutions.com
-  token: ${APPSENSE_TOKEN:}     # set via environment variable
-  provider-id: PR000002
-  clinician-id: 856d38a8-d240-4ffc-ba52-f0781aea1844
-  facility-npi: "1114535333"
-  service-type-id: "1"
-  place-of-service-id: "12"
-  visit-length: 30
-  visit-type: Consult
-  visit-status: ReadyForProvider
-  bill-to-facility: false
