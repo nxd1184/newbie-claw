@@ -6,22 +6,55 @@ import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.domain.io.UserInput
 import dev.stevennguyen.newbieclaw.config.InvoiceExtractionProperties
+import dev.stevennguyen.newbieclaw.config.ZoneExtractionConfig
 import dev.stevennguyen.newbieclaw.domain.invoice.PdfPath
 import dev.stevennguyen.newbieclaw.domain.invoice.InvoiceData
+import dev.stevennguyen.newbieclaw.domain.invoice.InvoiceDataV1
+import dev.stevennguyen.newbieclaw.service.OcrService
+import dev.stevennguyen.newbieclaw.service.ZoneDetectionEngine
 import org.apache.pdfbox.Loader
 import org.apache.pdfbox.text.PDFTextStripper
 import org.apache.pdfbox.rendering.PDFRenderer
+import org.apache.pdfbox.pdmodel.PDDocument
 import net.sourceforge.tess4j.Tesseract
 import java.io.File
 import java.awt.image.BufferedImage
 
 @Agent(description = "Extracts complete structured invoice data from PDF files. Use when user wants full invoice extraction with all fields.")
-class InvoiceExtractionAgent(private val props: InvoiceExtractionProperties) {
+class InvoiceExtractionAgent(
+    private val props: InvoiceExtractionProperties,
+    private val zoneConfig: ZoneExtractionConfig,
+    private val ocrService: OcrService,
+    private val zoneDetectionEngine: ZoneDetectionEngine
+) {
+
+    private fun cleanExtractedText(raw: String): String {
+        return raw
+            .replace("\r\n", "\n")
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+    }
+
+    private fun extractRelevantSections(text: String): String {
+        val keywords = listOf("customer", "order", "invoice", "line", "item", "qty", "quantity")
+        val lines = text.lines()
+
+        val relevant = lines.filter { line ->
+            val lower = line.lowercase()
+            keywords.any { lower.contains(it) }
+        }
+
+        return if (relevant.isNotEmpty()) relevant.joinToString("\n") else text
+    }
 
     @Action(description = "Parse user input to extract PDF file path and validate it exists")
     fun parsePdfPath(userInput: UserInput, context: OperationContext): PdfPath {
         println("\n" + "=".repeat(80))
-        println(">>> STEP 1/3: Parsing PDF path")
+        println(">>> STEP 1/2: Parsing PDF path")
         println("=".repeat(80) + "\n")
 
         val text = userInput.content
@@ -102,8 +135,10 @@ class InvoiceExtractionAgent(private val props: InvoiceExtractionProperties) {
             println(text)
             println("=".repeat(80))
             println()
-            
-            return text
+
+            val cleanedText = cleanExtractedText(text)
+            val focusedText = extractRelevantSections(cleanedText)
+            return focusedText
         } catch (e: Exception) {
             println("\n    ❌ Error extracting text from PDF: ${e.message}")
             throw e
@@ -148,83 +183,220 @@ class InvoiceExtractionAgent(private val props: InvoiceExtractionProperties) {
         return finalText
     }
 
-    @AchievesGoal(description = "Extract structured invoice data from the PDF text using LLM")
-    @Action(description = "Analyze extracted text and identify invoice fields to produce structured InvoiceData")
-    fun extractInvoiceData(extractedText: String, context: OperationContext): InvoiceData {
+//    @AchievesGoal(description = "Extract structured invoice data from the PDF text using LLM")
+//    @Action(description = "Analyze extracted text and identify invoice fields to produce structured InvoiceData")
+//    fun extractInvoiceData(extractedText: String, context: OperationContext): InvoiceData {
+//        println("\n" + "=".repeat(80))
+//        println(">>> STEP 3/3: Extracting structured invoice data")
+//        println("=".repeat(80) + "\n")
+//
+//        val prompt = """
+//            You are an expert invoice data extractor. Analyze the following text extracted from an invoice/delivery receipt PDF
+//            and extract all relevant information into a structured format.
+//
+//            Extract the following information:
+//
+//            VENDOR INFORMATION:
+//            - name, address, phone, fax/email, tax ID
+//
+//            CUSTOMER INFORMATION:
+//            - name, billToAddress, shipToAddress, phone
+//
+//            INVOICE METADATA:
+//            - invoiceNumber (document number)
+//            - invoiceDate
+//            - dueDate (if specified)
+//            - currency (default "USD" if not specified)
+//            - paymentTerms (e.g., "NET 30 DAYS")
+//            - documentType (e.g., "DELIVERY RECEIPT", "SALES ORDER", "INVOICE")
+//            - salesRepresentative (inside salesperson name)
+//            - customerOrderNumber (if available)
+//
+//            LINE ITEMS (for each item):
+//            - itemNumber (item/part number)
+//            - description (product description)
+//            - quantity (numeric value)
+//            - unit (e.g., "EA", "LBS", "PC")
+//            - unitPrice (price per unit)
+//            - extendedQuantity (additional quantity info like "12 pieces")
+//            - total (line total amount)
+//            - materialSpecs (chemical composition or material specifications if present)
+//
+//            SHIPPING INFORMATION:
+//            - freightMethod (e.g., "OUR TRUCK", "UPS", "FEDEX")
+//            - route (delivery route code)
+//            - shipDate (if different from invoice date)
+//            - shipToAddress (if different from customer address)
+//
+//            FINANCIAL AMOUNTS:
+//            - subtotal (sum before tax)
+//            - taxAmount (tax charged)
+//            - taxRate (tax percentage if shown)
+//            - discount (any discounts applied)
+//            - total (final total amount)
+//
+//            NOTES:
+//            - Any special instructions, terms, or additional information
+//
+//            Be precise with numbers and dates. If a field is not found, use null.
+//            Extract chemical composition data if present in the invoice.
+//
+//            Invoice Text:
+//            ```
+//            $extractedText
+//            ```
+//        """.trimIndent()
+//
+//        println("    ⏱  Sending to LLM for structured extraction...")
+//        val invoiceData = context.ai().withDefaultLlm().createObject(prompt, InvoiceData::class.java)
+//
+//        println("\n    ✓ Invoice data extracted successfully:")
+//        println("      - Document Type: ${invoiceData.metadata.documentType ?: "Invoice"}")
+//        println("      - Invoice #: ${invoiceData.metadata.invoiceNumber}")
+//        println("      - Date: ${invoiceData.metadata.invoiceDate}")
+//        println("      - Vendor: ${invoiceData.vendor.name}")
+//        println("      - Customer: ${invoiceData.customer.name}")
+//        println("      - Sales Rep: ${invoiceData.metadata.salesRepresentative ?: "N/A"}")
+//        println("      - Line Items: ${invoiceData.lineItems.size}")
+//        println("      - Total: ${invoiceData.amounts.total} ${invoiceData.metadata.currency}")
+//
+//        return invoiceData
+//    }
+
+    @AchievesGoal(description = "Extract minimal invoice fields from the PDF using zone-based extraction with LLM fallback")
+    @Action(description = "Analyze PDF and identify customer number, invoice number, and first line number using zones")
+    fun extractInvoiceDataV1(pdfPath: PdfPath, context: OperationContext): InvoiceDataV1 {
         println("\n" + "=".repeat(80))
-        println(">>> STEP 3/3: Extracting structured invoice data")
+        println(">>> STEP 2/2: Extracting minimal invoice data using zone-based extraction")
         println("=".repeat(80) + "\n")
 
+        val file = File(pdfPath.path)
+        val document = Loader.loadPDF(file)
+        
+        try {
+            val ocrWords = ocrService.extractOcrWords(document)
+            
+            if (ocrWords.isEmpty()) {
+                println("    ⚠️  No OCR words extracted, falling back to text-based LLM extraction...")
+                return fallbackToLlmExtraction(pdfPath, context)
+            }
+            
+            val zoneResult = zoneDetectionEngine.detectAndExtractZones(ocrWords, document)
+            
+            // Check if all required fields were extracted AND are valid digit formats
+            val customerNumber = zoneResult.getZoneValue("customer-number")
+            val invoiceNumber = zoneResult.getZoneValue("order-number")
+            val firstLineNumber = zoneResult.getZoneValue("line-number")
+            
+            val isValidCustomerNumber = customerNumber?.matches(Regex("\\d{7}")) == true
+            val isValidInvoiceNumber = invoiceNumber?.matches(Regex("\\d{8}")) == true
+            val isValidLineNumber = firstLineNumber?.matches(Regex("\\d{4}")) == true
+            
+            val allFieldsExtracted = isValidCustomerNumber && isValidInvoiceNumber && isValidLineNumber
+            
+            if (zoneResult.isHighConfidence()) {
+                println("\n    ✅ High confidence zone extraction (${zoneResult.overallConfidence})")
+                return buildInvoiceDataFromZones(zoneResult)
+            } else if (allFieldsExtracted) {
+                println("\n    ✅ All fields extracted via zone-based + regex fallback (confidence: ${zoneResult.overallConfidence})")
+                println("    📋 Trusting regex fallback results:")
+                println("      - Customer #: $customerNumber")
+                println("      - Invoice #: $invoiceNumber")
+                println("      - First Line #: $firstLineNumber")
+                return buildInvoiceDataFromZones(zoneResult)
+            } else if (zoneResult.isMediumConfidence()) {
+                println("\n    ⚠️  Medium confidence zone extraction (${zoneResult.overallConfidence})")
+                println("    🔄 Validating with LLM...")
+                
+                val zoneBasedData = buildInvoiceDataFromZones(zoneResult)
+                val llmData = fallbackToLlmExtraction(pdfPath, context)
+                
+                return mergeResults(zoneBasedData, llmData, zoneResult.overallConfidence)
+            } else {
+                println("\n    ❌ Low confidence zone extraction (${zoneResult.overallConfidence})")
+                println("    🔄 Falling back to LLM extraction...")
+                return fallbackToLlmExtraction(pdfPath, context)
+            }
+        } catch (e: Exception) {
+            println("\n    ❌ Error in zone extraction: ${e.message}")
+            println("    🔄 Falling back to LLM extraction...")
+            return fallbackToLlmExtraction(pdfPath, context)
+        } finally {
+            document.close()
+        }
+    }
+    
+    private fun buildInvoiceDataFromZones(zoneResult: dev.stevennguyen.newbieclaw.domain.invoice.ZoneExtractionResult): InvoiceDataV1 {
+        val customerNumber = zoneResult.getZoneValue("customer-number")
+        val invoiceNumber = zoneResult.getZoneValue("order-number")
+        val firstLineNumber = zoneResult.getZoneValue("line-number")
+        
+        println("\n    📋 Zone-based extraction results:")
+        println("      - Customer #: $customerNumber (confidence: ${zoneResult.getZoneConfidence("customer-number")})")
+        println("      - Invoice #: $invoiceNumber (confidence: ${zoneResult.getZoneConfidence("order-number")})")
+        println("      - First Line #: $firstLineNumber (confidence: ${zoneResult.getZoneConfidence("line-number")})")
+        
+        return InvoiceDataV1(
+            customerNumber = customerNumber,
+            invoiceNumber = invoiceNumber,
+            firstLineNumber = firstLineNumber
+        )
+    }
+    
+    private fun fallbackToLlmExtraction(pdfPath: PdfPath, context: OperationContext): InvoiceDataV1 {
+        val extractedText = extractTextFromPdf(pdfPath)
+        
         val prompt = """
-            You are an expert invoice data extractor. Analyze the following text extracted from an invoice/delivery receipt PDF 
-            and extract all relevant information into a structured format.
-            
-            Extract the following information:
-            
-            VENDOR INFORMATION:
-            - name, address, phone, fax/email, tax ID
-            
-            CUSTOMER INFORMATION:
-            - name, billToAddress, shipToAddress, phone
-            
-            INVOICE METADATA:
-            - invoiceNumber (document number)
-            - invoiceDate
-            - dueDate (if specified)
-            - currency (default "USD" if not specified)
-            - paymentTerms (e.g., "NET 30 DAYS")
-            - documentType (e.g., "DELIVERY RECEIPT", "SALES ORDER", "INVOICE")
-            - salesRepresentative (inside salesperson name)
-            - customerOrderNumber (if available)
-            
-            LINE ITEMS (for each item):
-            - itemNumber (item/part number)
-            - description (product description)
-            - quantity (numeric value)
-            - unit (e.g., "EA", "LBS", "PC")
-            - unitPrice (price per unit)
-            - extendedQuantity (additional quantity info like "12 pieces")
-            - total (line total amount)
-            - materialSpecs (chemical composition or material specifications if present)
-            
-            SHIPPING INFORMATION:
-            - freightMethod (e.g., "OUR TRUCK", "UPS", "FEDEX")
-            - route (delivery route code)
-            - shipDate (if different from invoice date)
-            - shipToAddress (if different from customer address)
-            
-            FINANCIAL AMOUNTS:
-            - subtotal (sum before tax)
-            - taxAmount (tax charged)
-            - taxRate (tax percentage if shown)
-            - discount (any discounts applied)
-            - total (final total amount)
-            
-            NOTES:
-            - Any special instructions, terms, or additional information
-            
-            Be precise with numbers and dates. If a field is not found, use null.
-            Extract chemical composition data if present in the invoice.
-            
-            Invoice Text:
-            ```
-            $extractedText
-            ```
-        """.trimIndent()
+        You are an expert invoice data extractor.
+        
+        From the following invoice or delivery receipt text, extract only these fields:
 
-        println("    ⏱  Sending to LLM for structured extraction...")
-        val invoiceData = context.ai().withDefaultLlm().createObject(prompt, InvoiceData::class.java)
-        
-        println("\n    ✓ Invoice data extracted successfully:")
-        println("      - Document Type: ${invoiceData.metadata.documentType ?: "Invoice"}")
-        println("      - Invoice #: ${invoiceData.metadata.invoiceNumber}")
-        println("      - Date: ${invoiceData.metadata.invoiceDate}")
-        println("      - Vendor: ${invoiceData.vendor.name}")
-        println("      - Customer: ${invoiceData.customer.name}")
-        println("      - Sales Rep: ${invoiceData.metadata.salesRepresentative ?: "N/A"}")
-        println("      - Line Items: ${invoiceData.lineItems.size}")
-        println("      - Total: ${invoiceData.amounts.total} ${invoiceData.metadata.currency}")
-        
+        - customerNumber
+        - invoiceNumber
+        - firstLineNumber
+
+        Rules:
+        - Return only these 3 fields.
+        - If a field is not found, use null.
+        - Extract numeric values only.
+        - Do not guess.
+        - firstLineNumber means the first line item number appearing in the line-item section of the document.
+
+        Invoice Text:
+        ```
+        $extractedText
+        ```
+    """.trimIndent()
+
+        println("    ⏱  Sending to LLM for extraction...")
+        val invoiceData = context.ai()
+            .withDefaultLlm()
+            .createObject(prompt, InvoiceDataV1::class.java)
+
+        println("\n    ✓ LLM extraction completed:")
+        println("      - Customer #: ${invoiceData.customerNumber}")
+        println("      - Invoice #: ${invoiceData.invoiceNumber}")
+        println("      - First Line #: ${invoiceData.firstLineNumber}")
+
         return invoiceData
+    }
+    
+    private fun mergeResults(zoneData: InvoiceDataV1, llmData: InvoiceDataV1, zoneConfidence: Float): InvoiceDataV1 {
+        println("\n    🔀 Merging zone-based and LLM results...")
+        
+        val customerNumber = if (!zoneData.customerNumber.isNullOrBlank()) zoneData.customerNumber else llmData.customerNumber
+        val invoiceNumber = if (!zoneData.invoiceNumber.isNullOrBlank()) zoneData.invoiceNumber else llmData.invoiceNumber
+        val firstLineNumber = if (!zoneData.firstLineNumber.isNullOrBlank()) zoneData.firstLineNumber else llmData.firstLineNumber
+        
+        println("    ✓ Merged results:")
+        println("      - Customer #: $customerNumber")
+        println("      - Invoice #: $invoiceNumber")
+        println("      - First Line #: $firstLineNumber")
+        
+        return InvoiceDataV1(
+            customerNumber = customerNumber,
+            invoiceNumber = invoiceNumber,
+            firstLineNumber = firstLineNumber
+        )
     }
 }
